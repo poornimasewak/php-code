@@ -1,0 +1,784 @@
+PHP controller code for a group page (a page where someone can see all the groups on a website created by others or himself)
+// Function For Group List
+	function index()
+	{
+		$user_id = $this->session->userdata('user_id');
+		// Search Condition Starts Here
+		$uri_segment = 2;
+		$by = trim($_REQUEST['by']);
+		$keyword = trim($_REQUEST['keyword']);
+		$sql_search = $this->_get_search_key($keyword, $by);
+		if(trim($sql_search) != "")
+		{
+			$str_param = "?by=".$by."&keyword=".$keyword."&";
+			$uri_segment = 3;
+		  $this->data['keyword'] = $keyword;
+			$this->data['by'] = $by;
+		}
+		$cond = " AND group_status=1 ".$sql_search;
+		// Search Condition Ends Here
+		
+		// Sorting
+		$arr_sortby = "";
+		$sortby = trim($_REQUEST['sortby']);
+		if($sortby == 'lastcomment')
+		{
+			$arr_sortby = array("last_comment_time", "DESC");
+		}
+		elseif($sortby == 'lastpost')
+		{
+			$arr_sortby = array("last_post_time", "DESC");
+		}
+		elseif($sortby == 'alpha')
+		{
+			$arr_sortby = array("group_name", "ASC");
+		}
+		elseif($sortby == 'member')
+		{
+			$arr_sortby = array("no_of_member", "DESC");
+		}
+		else
+		{
+			$arr_sortby = array("group_id", "DESC"); // Newest
+		}
+		
+		if($sortby != '')
+		{
+			$str_param = "?sortby=".$sortby."&";
+		}
+		
+		// Pagination
+		$this->load->library('pagination');
+		$this->pagination_config();
+		$this->arrpagination['base_url'] = $this->arrpagination['base_url'] . $str_param;
+		$this->arrpagination['total_rows'] = $this->group_model->count_row($cond);
+		$this->arrpagination['per_page'] = 20;
+		$this->arrpagination['uri_segment'] = $uri_segment;
+		$offset = $this->uri->segment($this->arrpagination['uri_segment']);
+		$limit = $this->arrpagination['per_page'];
+		$offset = ($offset==''?'0':$offset);
+		$this->pagination->initialize($this->arrpagination);
+		
+		$str_user_id = $str_group_id = "";
+		$arr_user_detail = $arr_group_new_mem_count = $arr_group_category = array();
+		
+		// Group
+		$res_group = $this->group_model->fetch($cond, "", $limit, $offset, $arr_sortby);
+		if($res_group && is_array($res_group) && count($res_group) > 0)
+		{
+			foreach($res_group as $key=>$val)
+			{
+				$str_user_id .= $val['user_id'].",";
+				
+				$str_group_id .= $val['group_id'].",";
+			}
+		}
+		//var_dump($res_group); //group_image_name
+		
+		// Logged User Group
+		$arr_logged_user_group = array();
+		if($user_id > 0)
+		{
+			$res_user_group = $this->group_member_model->fetch("AND user_id='$user_id'");
+			if($res_user_group && is_array($res_user_group) && count($res_user_group) > 0)
+			{
+				foreach($res_user_group as $key=>$val)
+				{
+					$arr_logged_user_group[$val['group_id']] = $val['group_member_status'];
+				}
+			}
+		}
+		
+		// User
+		$str_user_id = rtrim($str_user_id, ",");
+		if(trim($str_user_id) != "")
+		{
+			$this->load->model('user_model');
+			
+			$res_user = $this->user_model->fetch("AND user_id IN ($str_user_id)", "user_id, username");
+			if($res_user && is_array($res_user) && count($res_user) > 0)
+			{
+				foreach($res_user as $key=>$val)
+				{
+					$arr_user_detail[$val['user_id']] = array('username'=>$val['username']);
+				}
+			}
+		}
+		
+		// Group Member Count
+		$str_group_id = rtrim($str_group_id, ",");
+		if(trim($str_group_id) != "")
+		{
+			// New Member Count
+			$current_datetime = $this->get_current_datetime();
+			$last_datetime = ($current_datetime - (24 * 60 * 60 * 7));
+			$sql = "SELECT group_id, count(*) as cnt FROM be_group_member WHERE group_id IN ($str_group_id) AND group_member_role != 'admin' AND group_member_status='joined' AND joined_on >= $last_datetime GROUP BY group_id";
+			$query = $this->db->query($sql);
+			$res_group_new_mem_count = $query->result_array();
+			if($res_group_new_mem_count && is_array($res_group_new_mem_count) && count($res_group_new_mem_count) > 0)
+			{
+				foreach($res_group_new_mem_count as $key=>$val)
+				{
+					$arr_group_new_mem_count[$val['group_id']] = $val['cnt'];
+				}
+			}
+		}
+		
+		// Group Category
+		$res_group_category = $this->group_category_model->fetch();
+		if($res_group_category && is_array($res_group_category) && count($res_group_category) > 0)
+		{
+			foreach($res_group_category as $key=>$val)
+			{
+				$arr_group_category[$val['group_category_id']] = $val['group_category_name'];
+			}
+		}
+		
+		$this->data['arr_logged_user_group'] = $arr_logged_user_group;
+		$this->data['arr_group_new_mem_count'] = $arr_group_new_mem_count;
+		$this->data['arr_user_detail'] = $arr_user_detail;
+		$this->data['arr_group_category'] = $arr_group_category;
+		$this->data['res_group'] = $res_group;
+		$this->load->view($this->view_dir.'group', $this->data);
+	}
+	
+	// Function For Generating Search String
+	function _get_search_key($keyword="", $by="")
+	{
+		$sql_search = "";
+		if($keyword != "" && $keyword != "&")
+		{
+			$k_arr = explode(' ', $keyword);
+			foreach($k_arr as $k=>$v)
+			{
+				if($by == 'title')
+				{
+					$sql_search .= " group_name LIKE '%$v%' OR";
+				}
+				else
+				{
+					$sql_search .= " username LIKE '%$v%' OR";
+				}
+			}
+			
+			if($sql_search != "")
+			{
+				$sql_search = rtrim($sql_search, 'OR');
+				$sql_search = " AND (".$sql_search.") ";
+			}
+			
+			if($by == 'username')
+			{
+				$sql_search = " AND user_id IN (SELECT user_id FROM be_user WHERE user_status=1 ".$sql_search.") ";
+			}	
+		}
+		
+		return $sql_search;
+	}
+	
+	// Function For Creating Group
+	function create()
+	{
+		if(!$this->check_loggedin_user())
+		{
+			$this->session->set_flashdata('need_to_login_msg', '1');
+			redirect($this->data['base_url']);
+		}
+		
+		$user_id = $this->session->userdata('user_id');
+        $str_user_id = $str_group_id = $str_your_group_id = "";
+        $arr_user_detail = $arr_group_detail = $arr_group_new_mem_count = $arr_cuser_detail = array();
+        // Your Group
+        $sql = "SELECT g.group_id, g.user_id, g.group_category_id, g.group_name, g.short_desc, g.no_of_member,g.group_image_name FROM be_group_member gm, be_group g
+			WHERE g.group_id = gm.group_id AND g.group_status=1 AND gm.user_id='$user_id' AND gm.group_member_status='joined'";
+        $query = $this->db->query($sql);
+        $res_group = $query->result_array();
+        if($res_group && is_array($res_group) && count($res_group) > 0)
+        {
+            foreach($res_group as $key=>$val)
+            {
+                $str_user_id .= $val['user_id'].",";
+
+                $str_your_group_id .= $val['group_id'].",";
+            }
+        }
+        // User
+        $user_id = rtrim($user_id, ",");
+        if(trim($user_id) != "")
+        {
+            $this->load->model('user_model');
+            $res_user = $this->user_model->fetch("AND user_id IN ($user_id)", "username, profile_img");
+            if($res_user && is_array($res_user) && count($res_user) > 0)
+            {
+                foreach($res_user as $key=>$val)
+                {
+                    $arr_user_detail[$val['user_id']] = array('username'=>$val['username'], 'profile_img'=>$val['profile_img']);
+                }
+            }
+            $this->data['res_user'] = $res_user;
+        }
+        // Creator User
+        $str_user_id = rtrim($str_user_id, ",");
+        if(trim($str_user_id) != "")
+        {
+            $this->load->model('user_model');
+
+            $res_cuser = $this->user_model->fetch("AND user_id IN ($str_user_id)", "user_id, username");
+            if($res_cuser && is_array($res_cuser) && count($res_cuser) > 0)
+            {
+                foreach($res_cuser as $key=>$val)
+                {
+                    $arr_cuser_detail[$val['user_id']] = array('username'=>$val['username']);
+                }
+            }
+        }
+
+        // Group
+        $str_group_id = rtrim($str_group_id, ",");
+        if(trim($str_group_id) != "")
+        {
+            $res_group_detail = $this->group_model->fetch("AND group_id IN ($str_group_id)");
+            if($res_group_detail && is_array($res_group_detail) && count($res_group_detail) > 0)
+            {
+                foreach($res_group_detail as $key=>$val)
+                {
+                    $arr_group_detail[$val['group_id']] = $val;
+                }
+            }
+        }
+
+        // Group Category
+        $res_group_category = $this->group_category_model->fetch();
+        if($res_group_category && is_array($res_group_category) && count($res_group_category) > 0)
+        {
+            foreach($res_group_category as $key=>$val)
+            {
+                $arr_group_category[$val['group_category_id']] = $val['group_category_name'];
+            }
+        }
+
+        // Your Group
+        $str_your_group_id = rtrim($str_your_group_id, ",");
+        if(trim($str_your_group_id) != "")
+        {
+            // New Member Count
+            $current_datetime = $this->get_current_datetime();
+            $last_datetime = ($current_datetime - (24 * 60 * 60 * 7));
+            $sql = "SELECT group_id, count(*) as cnt FROM be_group_member WHERE group_id IN ($str_your_group_id) AND group_member_status='joined' AND joined_on >= $last_datetime GROUP BY group_id";
+            $query = $this->db->query($sql);
+            $res_group_new_mem_count = $query->result_array();
+            if($res_group_new_mem_count && is_array($res_group_new_mem_count) && count($res_group_new_mem_count) > 0)
+            {
+                foreach($res_group_new_mem_count as $key=>$val)
+                {
+                    $arr_group_new_mem_count[$val['group_id']] = $val['cnt'];
+                }
+            }
+        }
+
+
+
+            // Group Member
+            $str_user_id = "";
+            $arr_group_member_status = array();
+            $res_group_member = $this->group_member_model->fetch("AND group_id='$group_id' ", "user_id,group_member_role,group_member_status");
+            if($res_group_member && is_array($res_group_member) && count($res_group_member) > 0)
+            {
+                foreach($res_group_member as $key=>$val)
+                {
+                    $str_user_id .= $val['user_id'].",";
+
+                    if($val['group_member_role'] != 'admin')
+                    {
+                        $arr_group_member_status[$val['group_member_status']][] = array('user_id'=>$val['user_id'], 'group_member_role'=>$val['group_member_role'], 'group_member_status'=>$val['group_member_status']);
+                    }
+                }
+            }
+
+
+        if($this->input->post('submit'))
+		{
+			$group_name = trim($this->input->post('group_name'));
+			$short_desc = trim($this->input->post('short_desc'));
+			//$description = trim($this->input->post('description'));
+			$group_category_id = trim($this->input->post('group_category_id'));
+			$group_access = trim($this->input->post('group_access'));
+			$staff_remove_comment = trim($this->input->post('staff_remove_comment'));
+			$staff_remove_picture = trim($this->input->post('staff_remove_picture'));
+			$staff_news_posting = trim($this->input->post('staff_news_posting'));
+			$staff_add_connection = trim($this->input->post('staff_add_connection'));
+			$staff_remove_member = trim($this->input->post('staff_remove_member'));
+			$staff_board = trim($this->input->post('staff_board'));
+			$group_comment = trim($this->input->post('group_comment'));
+			$group_board_anonymous_post = trim($this->input->post('group_board_anonymous_post'));
+			$cmb_group_image = trim($this->input->post('cmb_group_image'));
+			$group_image = $cmb_group_image;
+			
+			$current_datetime = $this->get_current_datetime();
+			
+			$group_id = $this->group_model->add(array('user_id'=>$user_id, 'group_category_id'=>$group_category_id, 'group_name'=>$group_name, 'short_desc'=>$short_desc,
+									'group_access'=>$group_access, 'staff_remove_comment'=>$staff_remove_comment, 'staff_remove_picture'=>$staff_remove_picture, 
+									'staff_news_posting'=>$staff_news_posting, 'staff_add_connection'=>$staff_add_connection, 'staff_remove_member'=>$staff_remove_member, 'staff_board'=>$staff_board, 
+									'group_comment'=>$group_comment, 'group_board_anonymous_post'=>$group_board_anonymous_post, 'group_image'=>$group_image, 'create_date'=>$current_datetime));
+			
+			$this->group_member_model->add(array('group_id'=>$group_id, 'user_id'=>$user_id, 'group_member_role'=>'admin', 'group_member_status'=>'joined', 'joined_on'=>$current_datetime));
+
+            //Add Anime Connections
+
+            $anime_id_arr=$_REQUEST['a_search'];
+
+            $anime_arr=$this->anime_model->fetch("AND title='$anime_id_arr'","anime_id");
+            $anime_id=$anime_arr[0]['anime_id'];
+            if(is_array($anime_arr)&& $anime_arr  && count($anime_arr) > 0)
+            {
+                foreach($anime_arr as $key=>$val)
+                {
+                    $field_value_re=array();
+                    $field_value_re['user_id'] = $user_id;
+                    $field_value_re['group_id']= $group_id;
+                    $field_value_re['type']	   = 'anime';
+                    $field_value_re['info_id'] = $anime_id;
+                    $field_value_re['status']  = 1; // waiting for approval3
+                    $field_value_re['added_on']	= $this->get_current_datetime();
+
+                    $cond = "  AND type='".$field_value_re['type']."'  AND 	group_id='$group_id' AND info_id='" .$field_value_re['info_id']."'  ";
+                    if($this->group_info_model->count_row($cond)<=0)
+                    {
+                        $this->group_info_model->add($field_value_re);
+                    }
+                }
+            }
+
+            //Add Manga Connections
+
+            $manga_id_arr=$_REQUEST['m_search'];
+            $manga_arr=$this->anime_model->fetch("AND title='$manga_id_arr'","anime_id");
+            $anime_id=$manga_arr[0]['anime_id'];
+            if(is_array($manga_arr)&& $manga_arr  && count($manga_arr) > 0)
+            {
+                foreach($manga_arr as $key=>$val)
+                {
+                    $field_value_re = array();
+                    $field_value_re['user_id'] = $user_id;
+                    $field_value_re['group_id']= $group_id;
+                    $field_value_re['type']	   = 'manga';
+                    $field_value_re['info_id'] = $anime_id;
+                    $field_value_re['status']  = 1; // waiting for approval3
+                    $field_value_re['added_on']	= $this->get_current_datetime();
+
+                    $cond = "  AND type='".$field_value_re['type']."'  AND 	group_id='$group_id' AND info_id='".$field_value_re['info_id']."'  ";
+                    if($this->group_info_model->count_row($cond)<=0)
+                    {
+                        $this->group_info_model->add($field_value_re);
+                    }
+                }
+            }
+
+            // Add Character Connections
+
+            $character_id_arr = $_REQUEST['c_search'];
+            //$this->session->set_userdata("a",$character_id_arr);
+            $character_arr=$this->info_character_model->fetch("AND fname='$character_id_arr'","char_id");
+            $char_id=$character_arr[0]['char_id'];
+            if(is_array($character_arr)&& $character_arr  && count($character_arr) > 0)
+            {
+                foreach($character_arr as $key=>$val)
+                {
+                    $field_value_re = array();
+                    $field_value_re['user_id'] = $user_id;
+                    $field_value_re['group_id']= $group_id;
+                    $field_value_re['type']	   = 'character';
+                    $field_value_re['info_id'] = $char_id;
+                    $field_value_re['status']  = 1; // waiting for approval3
+                    $field_value_re['added_on'] = $this->get_current_datetime();
+
+                    $cond = "  AND type='".$field_value_re['type']."'  AND 	group_id='$group_id' AND info_id='".$field_value_re['info_id']."'  ";
+                    if($this->group_info_model->count_row($cond)<=0)
+                    {
+                        $this->group_info_model->add($field_value_re);
+                    }
+                }
+            }
+
+            // Your Group
+            $str_your_group_id = rtrim($str_your_group_id, ",");
+            if(trim($str_your_group_id) != "")
+            {
+                // New Member Count
+                $current_datetime = $this->get_current_datetime();
+                $last_datetime = ($current_datetime - (24 * 60 * 60 * 7));
+                $sql = "SELECT group_id, count(*) as cnt FROM be_group_member WHERE group_id IN ($str_your_group_id) AND group_member_status='joined' AND joined_on >= $last_datetime GROUP BY group_id";
+                $query = $this->db->query($sql);
+                $res_group_new_mem_count = $query->result_array();
+                if($res_group_new_mem_count && is_array($res_group_new_mem_count) && count($res_group_new_mem_count) > 0)
+                {
+                    foreach($res_group_new_mem_count as $key=>$val)
+                    {
+                        $arr_group_new_mem_count[$val['group_id']] = $val['cnt'];
+                    }
+                }
+            }
+			
+			
+			// for maintain activity(group create)
+			$this->load->library('activity');
+			$param = array();
+			$param['work_id'] 	= $group_id;
+			$param['type']      = 'group';
+			$this->activity->update_activity($param);
+		
+			redirect("group/my");
+		}
+        $this->data['arr_group_new_mem_count'] = $arr_group_new_mem_count;
+		$this->data['res_group_category'] = $this->group_category_model->fetch();
+        $this->data['arr_group_new_mem_count'] = $arr_group_new_mem_count;
+        $this->data['arr_user_detail'] = $arr_user_detail;
+        $this->data['arr_cuser_detail'] = $arr_cuser_detail;
+        $this->data['arr_group_detail'] = $arr_group_detail;
+        $this->data['res_group'] = $res_group;
+
+
+		$this->load->view($this->view_dir.'create_group', $this->data);
+	}
+***********************************************************************************************************************************************
+PHP view code for a group page
+<?php echo $top_header; ?>
+<!-- Top Header Section Ends Here -->
+<link href="<?php echo $css_path; ?>view_groupsP.css" rel="stylesheet" type="text/css"/>
+
+<script type="text/javascript" src="<?php echo $js_path; ?>group.js"></script>
+<div id="page">
+    <!--start page -->
+
+    <!--Logo Header Starts here-->
+    <?php echo $logo_header; ?>
+    <!--Logo Header Ends here-->
+
+    <!--start content_area -->
+    <div class="content_area">
+
+        <!--start left top-->
+        <div class="left">
+            <!--Left Login Box Starts here-->
+            <?php echo $left_login_box; ?>
+            <!--Left Login Box Ends here-->
+        </div>
+        <!--end left top-->
+
+        <!--start right top-->
+        <div class="right_top">
+
+            <!--Top Menu Starts here-->
+            <?php echo $top_menu; ?>
+            <!--Top Menu Ends here-->
+
+            <div class="balance"></div>
+
+            <!--Recently Updated Profile Starts here-->
+            <?php echo $recently_updated_profile; ?>
+            <!--Recently Updated Profile Ends here-->
+
+        </div>
+        <div class="balance"></div>
+    </div>
+    <!--end content_area  -->
+
+    <!--start left -->
+    <div class="left1">
+        <!--Left Navigation Starts here-->
+        <?php include('left_navigation_group.php'); ?>
+        <!--Left Navigation Ends here-->
+    </div>
+    <!--end left -->
+
+    <!--start middle -->
+    <div id="big_right">
+        <!--start inside_middle -->
+        <div id="inside_big_right">
+
+            <div class="middle_top_box">
+                <div class="bigmenu">
+                    <!--User Menu Starts here-->
+                    <?php echo $user_menu; ?>
+                    <!--User Menu Ends here-->
+                </div>
+            </div>
+
+            <!---------------------------------------content Start--------------------------------------->
+            <div class="inside_page_content">
+                <div id="msgInGroup" class="error_display" style="display:none;" align="center"></div>
+                <form style="background-color:#F6F5F5; height: 44px; width: 723px;" name="usernameSearch"
+                      id="usernameSearch"
+                      method="post"
+                      onsubmit="return groupSearch('<?php echo site_url("group/index"); ?>');">
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                        <tr><td>&nbsp;</td></tr>
+                        <tr>
+                            <td style="width:50px;"><input style="width: 190px; margin-left: 4px;" type="text"
+                                                         name="keyword"
+                                                   id="keyword"
+                                                   placeholder="search..."
+                                                   value="<?php echo $keyword; ?>" class="textfield_border"/>
+                            </td>
+                            <td width="185"><input type="submit" name="submit" value="Search Groups"
+                                       class="search_group"/></td>
+                            <td width="100">Show By Category</td>
+                            <td width="100"><select name="by" id="by" class="username">
+                                    <option value="username" <?php if ($by == 'username') {
+                                        echo 'selected="selected"';
+                                    } ?>>Anime
+                                    </option>
+                                    <option value="title" <?php if ($by == 'title') {
+                                        echo 'selected="selected"';
+                                    } ?>>Manga
+                                    </option>
+                                </select></td>
+                                </tr>
+                    </table>
+                </form>
+                <br/>
+
+              <a style="float: right;" align="right" href="<?php echo site_url("group/create"); ?>"
+                         class="upload2">Create
+                    Group </a>
+            </div>
+
+         
+
+            <!--Groups Starts here -->
+<br/>
+
+            <span style="color: #6E6E6E; font-size: 11px;"><strong>Last Active Groups</strong></span>
+
+            <!-- --><?php
+            /*                    if ($res_group && is_array($res_group) && count($res_group) > 0) {
+                                    foreach ($res_group as $key => $val) {
+
+                                        $img = $val['group_image_name'] ? $val['group_image_name'] : "noimage.jpg";
+                                        */ ?>
+
+            <?php
+            if ($res_group && is_array($res_group) && count($res_group) > 0) {
+                $num = 0;
+                foreach ($res_group as $key => $val) {
+                    ?>
+                    <div class="search_area_white" id="div_group_<?php echo $val['group_id']; ?>">
+                        <table width="100%"  border="0" cellspacing="0" cellpadding="0" >
+                            <?php if ($num % 2 == 0) {
+                                echo '<tr class="msg_read_anime">';
+                            } else {
+                                echo '<tr class="msg_read_anime_even">';
+                            }
+                            $img = $val['group_image_name'] ? $val['group_image_name'] : "noimage.jpg";
+                            ?>
+                            <td style="padding-top: 0px; padding-bottom: 4px; padding-left: 1px;" align="center"
+                                width="108"><img
+                                    style="padding: 1px; width: 90px;
+                            height: 128px; border: 1px solid
+                            #BEBEBE"
+                                    src="<?php echo $upload_path ?>group/<?php echo $group_100X100; ?><?php echo
+                                    $img; ?>" />
+                            </td>
+                            <td valign="top">
+
+                                <table width="100%"  border="0" cellspacing="0" cellpadding="1">
+
+                                    <tr>
+                                        <td colspan="2" style="padding-top: 5px;color: #A7A7A7;" width="200"
+                                            align="left" ><a
+                                                class="blue_link"
+                                               href="<?php echo $base_url ?>group/view/<?php echo $val['group_id'];
+                                               ?>"><strong><?php echo $val['group_name']; ?></strong></a>
+                                            <?php echo
+                                            $val['group_access']?>&nbsp<?php
+                                                echo 'Group'; ?>
+
+                                        </td>
+                                    </tr>
+
+
+                                    <tr><th><h3 style="width: 200px" align="left">&nbsp;</h3></th></tr>
+                                   <tr><td colspan="2" style="color: #6E6E6E"><?php echo
+                                           $val['description']; ?></td>
+                                        </tr>
+                                    <tr>  <td colspan="2">&nbsp;</td> </tr>
+                                    <tr>  <td colspan="2">&nbsp;</td> </tr>
+
+                                    <tr>
+                                        <br/><td colspan="3" style="color: #A7A7A7">   Last Activity: <a
+                                                href="<?php
+                                                echo
+                                                $base_url . "profile/" . $val['posted_by_user_id']; ?>" class="bluelink2"><?php echo $arr_user_detail[$val['user_id']]['username']; ?></a>
+                                            joined&nbsp<a class="blue_link" href="<?php echo $base_url ?>group/view/<?php echo $val['group_id'];?>"><?php echo
+                                                    $val['group_name'];
+                                                    ?>&nbspGroup</a>&nbsp-&nbsp<?php echo
+                                            $joined_on; $times=time()-($joined_on*86400);
+
+                                            ?></td>
+                                    </tr>
+                                    <tr>
+
+                                        <td style="color: #A7A7A7">   Creator:
+                                        <a class="bluelink2" href="<?php echo $base_url ?>profile/<?php echo $val['user_id']; ?>"><?php echo $arr_user_detail[$val['user_id']]['username']; ?></a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td colspan="2" height="33" valign="top" align="right"
+                                            style="padding-right: 15px;"
+                                            class="join_link">&nbsp;
+                                            <?php
+                                            if ($val['group_access=="Private"'])
+                                            {?>
+
+                                                <span id="request_<?php echo $val['user_id']; ?>"><a
+                                                       class="group_link1"
+                                                        href="Javascript:void(0);"
+                                                        onclick="user_request('<?php echo $val['user_id']; ?>');">
+                                                        Request Invite</a></span>
+
+                                                <?php
+                                                } else
+                                            { ?>
+
+
+                                                <span id="divJoinGroup_<?php echo $val['group_id']; ?>"><a
+                                                        class="join_link" href="Javascript:void(0);"
+                                                        onclick="join_group('<?php echo $val['group_id']; ?>');">Join
+                                                    </a></span>
+
+                                            <?php
+                                            }
+                                            ?>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                            </tr>
+                        </table>
+                    </div>
+                <?php $num++;
+                }
+            } else {
+                echo 'No group found.';
+            }
+            ?>
+        </div>
+        <?php
+        // Pagination
+        $str_pagination = $this->pagination->create_links();
+        if (trim($str_pagination) != '') {
+            ?>
+            <div class="pagination">
+                <ul>
+                    <li>Pages</li>
+                    <?php echo $str_pagination; ?>
+                </ul>
+            </div>
+        <?php
+        }
+        ?>
+
+        <!--Groups Ends here -->
+
+        <div class="balance"></div>
+    </div>
+    <!---------------------------------------content End--------------------------------------->
+
+</div>
+<!--end inside_middle -->
+</div>
+<!--end middle -->
+
+<div class="balance"></div>
+
+<!--Footer Menu Section Starts here-->
+<div id="img_section">
+    <!--Footer Menu Starts here -->
+    <?php echo $footer_menu; ?>
+    <!--Footer Menu Ends here -->
+    <div class="balance"></div>
+</div>
+<!--Footer Menu Section Ends here-->
+
+</div>
+<!--end page -->
+
+<!--Footer Starts here -->
+<?php echo $footer; ?>
+
+*****************************************************************************************************************************************
+JavaScript code for a group page
+
+function groupSearch(url)
+{
+	if($('keyword').value.blank() || $('keyword').value.length < 3)
+	{
+		$('msgInGroup').show().update('Please input minimum 3 character keyword');
+		return false;
+	}
+	
+	var by = $('by').value;
+	var keyword = $('keyword').value;
+	window.location.href = url + '/?by='+by+'&keyword='+keyword+"&";
+
+	return false;
+}
+
+
+function confirm_leave_group(group_id)
+{
+	$('leaveGroup_'+group_id).hide();
+	$('confirmLeavingGroup_'+group_id).show();
+}
+
+function join_group(group_id)
+{
+	var url = SITE_ROOT + 'group/joingroup';
+	new Ajax.Request(url,{
+	method: 'post',
+	parameters: 'group_id='+group_id+'&rnd='+Math.random(),
+	onLoading: function(transport){
+
+	},
+	 onSuccess: function(transport){
+		var dr = transport.responseText;
+		
+		if(dr=="logexpire")
+		{
+			window.location.href = SITE_ROOT;
+		}
+		else if(dr==1)
+		{
+			$('divJoinGroup_'+group_id).innerHTML = 'Joined Successfully';
+		}
+		else if(dr==2)
+		{
+			$('divJoinGroup_'+group_id).innerHTML = 'Already Requested';
+		}
+		else if(dr==3)
+		{
+			$('divJoinGroup_'+group_id).innerHTML = 'Already Member';
+		}
+		else if(dr==4)
+		{
+			$('divJoinGroup_'+group_id).innerHTML = 'Banned From Group';
+		}
+		else if(dr==5)
+		{
+			window.location.href = SITE_ROOT+ 'group/my';
+		}
+		else if(dr==6)
+		{
+			$('divJoinGroup_'+group_id).innerHTML = 'Request Send';
+		}
+	 },
+	 onFailure: function(transport){
+		 // when the request fails
+		 alert('The request failed..');
+	 },
+	 onException: function(err){
+		 // When an exception is encountered while executing the callbacks
+		 alert('Exception');
+	 }
+	 });
+}
